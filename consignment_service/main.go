@@ -1,68 +1,38 @@
 package main
 
 import (
-	"context"
-	pb "go_projects/learngo/consignment_demo/consignment_service/proto/consignment"
-	"google.golang.org/grpc"
+	"fmt"
+	"github.com/micro/go-micro"
+	pb "go_projects/learngo/shippy_demo/consignment_service/proto/consignment"
+	vesselProto "go_projects/learngo/shippy_demo/consignment_service/proto/vessel"
 	"log"
-	"net"
-	"sync"
+	"os"
 )
 
 const (
-	port = ":50051"
+	defaultHost = "localhost:27017"
 )
 
-type repository interface {
-	Create(*pb.Consignment) (*pb.Consignment, error)
-	GetAll() []*pb.Consignment
-}
-
-type Repository struct {
-	mu           sync.RWMutex
-	consignments []*pb.Consignment
-}
-
-func (repo *Repository) Create(consignment *pb.Consignment) (*pb.Consignment, error) {
-	repo.mu.Lock()
-	defer repo.mu.Unlock()
-	updated := append(repo.consignments, consignment)
-	repo.consignments = updated
-	return consignment, nil
-}
-
-func (repo *Repository) GetAll() []*pb.Consignment {
-	return repo.consignments
-}
-
-type service struct {
-	repo repository
-}
-
-func (s *service) CreateConsignment(ctx context.Context, req *pb.Consignment) (*pb.Response, error) {
-	consignment, err := s.repo.Create(req)
-	if err != nil {
-		return nil, err
-	}
-
-	return &pb.Response{Created: true, Consignment: consignment}, nil
-}
-
-func (s *service) GetConsignments(ctx context.Context, req *pb.GetRequest) (*pb.Response, error) {
-	consignments := s.repo.GetAll()
-	return &pb.Response{Consignments: consignments}, nil
-}
-
 func main() {
-	repo := &Repository{}
-	listener, err := net.Listen("tcp", port)
-	if err != nil {
-		log.Fatalf("failed to listen: %v", err)
+	host := os.Getenv("DB_HOST")
+	if host == "" {
+		host = defaultHost
 	}
-	s := grpc.NewServer()
-	pb.RegisterShippingServiceServer(s, &service{repo})
-	log.Println("Running on port:", port)
-	if err := s.Serve(listener); err != nil {
-		log.Fatalf("failed to serve: %v", err)
+	session, err := CreateSession(host)
+	defer session.Close()
+	if err != nil {
+		log.Panicf("Could not connect to datastore with host %s - %v", host, err)
+	}
+	
+	srv := micro.NewService(
+		micro.Name("go.micro.srv.consignment"),
+		micro.Version("latest"),
+	)
+	
+	vesselClient := vesselProto.NewVesselServiceClient("go.micro.srv.vessel", srv.Client())
+	srv.Init()
+	pb.RegisterShippingServiceHandler(srv.Server(), &service{session, vesselClient})
+	if err := srv.Run(); err != nil {
+		fmt.Println(err)
 	}
 }
